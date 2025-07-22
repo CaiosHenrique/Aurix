@@ -24,6 +24,10 @@ class ChampView(View):
     async def update_message(self, interaction):
         champ = self.champs[self.index]
         embed = discord.Embed(title=champ.get('name', ''))
+        aura_level = champ.get('aura_level')
+        aura_label = champ.get('aura_label')
+        if aura_level and aura_label:
+            embed.add_field(name="", value=f"{aura_label} (Nível {aura_level})", inline=False)
         if 'image' in champ and 'skin_image' not in champ:
             embed.set_image(url=champ['image'])
         elif 'skin_image' in champ:
@@ -233,6 +237,46 @@ async def setAura(ctx, name, level):
     )
     await ctx.send(f"Aura do campeão {name} definida para '{aura_labels[level]}' (nível {level}).")
 
+@bot.command()
+async def changeskin(ctx, name):
+    champions_collection = get_champions_collection()
+    existent_champion = await champions_collection.find_one({"user_id": ctx.author.id, "name": name})
+    if not existent_champion:
+        await ctx.send("Você não possui esse campeão.")
+        return
+    
+    owned_skins = existent_champion.get('owned_skins', [])
+    if not owned_skins:
+        await ctx.send("Você não possui skins para este campeão.")
+        return
+    
+    embed = discord.Embed(title=f"Escolha uma skin para {name}")
+    for i, skin in enumerate(owned_skins):
+        embed.add_field(name=f"{i+1}. {skin['skin']}", value="", inline=False)
+    
+    await ctx.send(embed=embed)
+    await ctx.send("Digite o número da skin que você quer equipar:")
+    
+    def check(message):
+        return message.author == ctx.author and message.channel == ctx.channel
+    
+    try:
+        msg = await bot.wait_for('message', check=check, timeout=30.0)
+        choice = int(msg.content) - 1
+        
+        if 0 <= choice < len(owned_skins):
+            selected_skin = owned_skins[choice]
+            await champions_collection.update_one(
+                {"user_id": ctx.author.id, "name": name},
+                {"$set": {"skin_image": selected_skin['skin_image']}}
+            )
+            await ctx.send(f"Skin '{selected_skin['skin']}' equipada para {name}!")
+        else:
+            await ctx.send("Número inválido.")
+    except ValueError:
+        await ctx.send("Por favor, digite um número válido.")
+    except:
+        await ctx.send("Tempo esgotado.")
 
 @bot.command()
 async def help(ctx):
@@ -242,9 +286,10 @@ async def help(ctx):
         "!champ - Escolhe um campeão aleatório do League of Legends\n"
         "!mychamps - Mostra os campeões escolhidos por você\n"
         "!delete <nome> - Deleta o campeão escolhido por você\n"
-        "!skin <nome> - Adquire uma skin aleatória para o campeão escolhido\n"
+        "!skin - Adquire uma skin aleatória para um campeão aleatório\n"
         "!skins <nome> - Mostra as skins adquiridas para o campeão escolhido\n"
         "!search <nome> - Busca informações sobre um campeão\n"
+        "!changeskin <nome> - Permite escolher uma skin para o campeão escolhido\n"
         "(apenas admin) !setAura <nome> <nível> - Define o nível de aura do campeão (1-5)\n"
     )
     await ctx.send(help_message)
