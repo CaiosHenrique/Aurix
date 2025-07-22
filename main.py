@@ -13,6 +13,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+bot.remove_command('help')
 
 class ChampView(View):
     def __init__(self, champs):
@@ -22,10 +23,12 @@ class ChampView(View):
 
     async def update_message(self, interaction):
         champ = self.champs[self.index]
-        embed = discord.Embed(title=champ['name'])
-        embed.set_image(url=champ['image'])
+        embed = discord.Embed(title=champ.get('name', ''))
+        if 'image' in champ and 'skin_image' not in champ:
+            embed.set_image(url=champ['image'])
+        elif 'skin_image' in champ:
+            embed.set_image(url=champ['skin_image'])
         await interaction.response.edit_message(embed=embed, view=self)
-
     @discord.ui.button(label="⬅️", style=discord.ButtonStyle.secondary)
     async def previous(self, interaction: discord.Interaction, button: Button):
         self.index = (self.index - 1) % len(self.champs)
@@ -39,6 +42,10 @@ class ChampView(View):
 @bot.event
 async def on_ready():
     print(f'Bot conectado como {bot.user}')
+
+@bot.event
+async def on_command_error(ctx, error):
+    await ctx.send(f"Comando Irreconhecido ou erro")
 
 @bot.command()
 async def ping(ctx):
@@ -70,13 +77,19 @@ async def champ(ctx):
                 champion = champion[:idx+1] + champion[idx+1].lower() + champion[idx+2:]
     champion = champion.replace("'", "")
 
-    image = f"https://ddragon.leagueoflegends.com/cdn/img/champion/loading/{champion}_0.jpg"
+    image = f"https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{champion}_0.jpg"
 
     champion_data = {
         "user_id": ctx.author.id,
         "name": champion,
         "image": image
     }
+
+    existent_champion = await champions_collection.find_one({"name": champion})
+    if existent_champion:
+        await ctx.send(f"o campeão {champion} já foi escolhido.")
+        return
+
     await champions_collection.insert_one(champion_data)
     await ctx.send(image)
 
@@ -120,25 +133,59 @@ async def skin(ctx, name):
 
     await ctx.send(f"Adquirindo skin do campeão {name}...")
     while True:
-        number = random.randint(0, num_skins - 1)
-        skin = f"https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{name}_{number}.jpg"
-        new_skin = requests.get(skin)
+        number = random.randint(1, num_skins)
+        skin_url = f"https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{name}_{number}.jpg"
+        new_skin = requests.get(skin_url)
         print("Status code:", new_skin.status_code)
         if new_skin.status_code == 200:
             break
 
-    await ctx.send(skin)
+    skin_name = skins[number]['name'] if number < len(skins) else "Unknown"
+    if 'owned_skins' in existent_champion:
+        for s in existent_champion['owned_skins']:
+            if s['skin'] == skin_name:
+                await ctx.send(f"Você já possui a skin '{skin_name}' para o campeão {name}.")
+                return
+            
+    await champions_collection.update_one(
+            {"user_id": ctx.author.id, "name": name},
+            {"$push": {"owned_skins": {"skin": skin_name, "skin_image": skin_url}}}
+        )
+
+    new_skin = discord.Embed(title=f"{skin_name}")
+    new_skin.set_image(url=skin_url)
+    await ctx.send(embed=new_skin)
+
+@bot.command()
+async def skins(ctx, name):
+    champions_collection = get_champions_collection()
+    existent_champion = await champions_collection.find_one({"user_id": ctx.author.id, "name": name})
+    if not existent_champion:
+        await ctx.send("Você não possui esse campeão.")
+        await ctx.send("Use !mychamps para ver seus campeões.")
+        return
+    
+    skins = existent_champion.get('owned_skins', [])
+    if not skins:
+        await ctx.send("Você não possui skins para este campeão.")
+        return
+    
+    embed = discord.Embed(title=f"Skins do campeão {name}")
+    embed.set_image(url=existent_champion['skin_image'])
+
+    await ctx.send(embed=embed, view=ChampView(skins))
 
 
 @bot.command()
-async def h(ctx):
+async def help(ctx):
     help_message = (
         "Comandos disponíveis:\n"
         "!ping - Responde com Pong!\n"
         "!champ - Escolhe um campeão aleatório do League of Legends e envia a imagem\n"
         "!mychamps - Mostra o campeão escolhido por você\n"
         "!delete <nome> - Deleta o campeão escolhido por você\n"
-        "!getSkin <nome> - Obtém a skin do campeão escolhido por você\n"
+        "!skin <nome> - Adquire uma skin aleatória para o campeão escolhido\n"
+        "!skins <nome> - Mostra as skins adquiridas para o campeão escolhido\n"
     )
     await ctx.send(help_message)
 
