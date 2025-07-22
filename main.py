@@ -1,28 +1,40 @@
 
 import discord
 from discord.ext import commands
+from discord.ui import View, Button
 import os
 from dotenv import load_dotenv
 import requests
 import random
-from pymongo import MongoClient
-
-MONGO_URI = os.getenv('MONGO_URI')
-mongo_client = MongoClient(MONGO_URI)
-db = mongo_client['Aurix_db']
-
-try:
-    mongo_client.admin.command('ping')
-    print("Conexão com o MongoDB estabelecida com sucesso!")
-except Exception as e:
-    print(f"Falha ao conectar ao MongoDB: {e}")
-
+from database import get_champions_collection
 load_dotenv()
 
 intents = discord.Intents.default()
 intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
+
+class ChampView(View):
+    def __init__(self, champs):
+        super().__init__(timeout=60)
+        self.champs = champs
+        self.index = 0
+
+    async def update_message(self, interaction):
+        champ = self.champs[self.index]
+        embed = discord.Embed(title=champ['name'])
+        embed.set_image(url=champ['image'])
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="⬅️", style=discord.ButtonStyle.secondary)
+    async def previous(self, interaction: discord.Interaction, button: Button):
+        self.index = (self.index - 1) % len(self.champs)
+        await self.update_message(interaction)
+
+    @discord.ui.button(label="➡️", style=discord.ButtonStyle.secondary)
+    async def next(self, interaction: discord.Interaction, button: Button):
+        self.index = (self.index + 1) % len(self.champs)
+        await self.update_message(interaction)
 
 @bot.event
 async def on_ready():
@@ -34,13 +46,19 @@ async def ping(ctx):
 
 @bot.command()
 async def champ(ctx):
+    champions_collection = get_champions_collection()
     url = "https://ddragon.leagueoflegends.com/cdn/15.14.1/data/en_US/champion.json"
     champions = requests.get(url)
 
     data = champions.json()
     champion_names = [champ['name'] for champ in data['data'].values()]
     
-    champion = random.choice(champion_names)
+    while True:
+        champion = random.choice(champion_names)
+        
+        existing_champion = await champions_collection.find_one({"name": champion})
+        if not existing_champion:
+            break
 
     if champion == "Nunu & Willump": champion = "Nunu"
     if " " in champion:
@@ -54,27 +72,64 @@ async def champ(ctx):
 
     image = f"https://ddragon.leagueoflegends.com/cdn/img/champion/loading/{champion}_0.jpg"
 
-    if not hasattr(bot, "user_champions"):
-        bot.user_champions = {}
-    bot.user_champions[ctx.author.id] = {"id": ctx.author.id, "name": champion, "image": image}
-
+    champion_data = {
+        "user_id": ctx.author.id,
+        "name": champion,
+        "image": image
+    }
+    await champions_collection.insert_one(champion_data)
     await ctx.send(image)
 
 @bot.command()
 async def mychamps(ctx):
-    if not hasattr(bot, "user_champions") or ctx.author.id not in bot.user_champions:
-        await ctx.send("Você ainda não escolheu um campeão. Use !c para escolher.")
+    champions_collection = get_champions_collection()
+    champions = await champions_collection.find({"user_id": ctx.author.id}).to_list(length=100)
+    if not champions:
+        await ctx.send("Você ainda não escolheu um campeão.")
         return
-    champions = bot.user_champions[ctx.author.id]
-    print("meus campeões:", champions)
 
-    champion_name = champions["name"]
-    champion_image = champions["image"]
+    champ = champions[0]
+    embed = discord.Embed(title=champ['name'])
+    embed.set_image(url=champ['image'])
 
-    await ctx.send(f"Seu campeão é: {champion_name}")
-    await ctx.send(champion_image)
+    await ctx.send(embed=embed, view=ChampView(champions))
 
+@bot.command()
+async def delete(ctx, name):
+    champions_collection = get_champions_collection()
+    result = await champions_collection.delete_one({"user_id": ctx.author.id, "name": name})
+    if result.deleted_count > 0:
+        await ctx.send(f"Campeão {name} deletado com sucesso!")
+    else:
+        await ctx.send(f"Campeão {name} não encontrado.")
+
+@bot.command()
+async def skin(ctx, name):
+    champions_collection = get_champions_collection()
+    existent_champion = await champions_collection.find_one({"user_id": ctx.author.id, "name": name})
+    if not existent_champion:
+        await ctx.send("Voce nao possui esse campeao.")
+        await ctx.send("Use !mychamps para ver seus campeões.")
+        return
     
+    champion = f"https://ddragon.leagueoflegends.com/cdn/15.14.1/data/en_US/champion/{name}.json"
+    response = requests.get(champion)
+
+    skins = response.json().get('data', {}).get(name, {}).get('skins', [])
+    num_skins = len(skins)
+
+    await ctx.send(f"Adquirindo skin do campeão {name}...")
+    while True:
+        number = random.randint(0, num_skins - 1)
+        skin = f"https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{name}_{number}.jpg"
+        new_skin = requests.get(skin)
+        print("Status code:", new_skin.status_code)
+        if new_skin.status_code == 200:
+            break
+
+    await ctx.send(skin)
+
+
 @bot.command()
 async def h(ctx):
     help_message = (
@@ -82,6 +137,8 @@ async def h(ctx):
         "!ping - Responde com Pong!\n"
         "!champ - Escolhe um campeão aleatório do League of Legends e envia a imagem\n"
         "!mychamps - Mostra o campeão escolhido por você\n"
+        "!delete <nome> - Deleta o campeão escolhido por você\n"
+        "!getSkin <nome> - Obtém a skin do campeão escolhido por você\n"
     )
     await ctx.send(help_message)
 
