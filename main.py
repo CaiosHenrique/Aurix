@@ -77,10 +77,11 @@ async def champ(ctx):
                 champion = champion[:idx+1] + champion[idx+1].lower() + champion[idx+2:]
     champion = champion.replace("'", "")
 
-    image = f"https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{champion}_0.jpg"
+    image = f"https://ddragon.leagueoflegends.com/cdn/img/champion/loading/{champion}_0.jpg"
 
     champion_data = {
         "user_id": ctx.author.id,
+        "owner": ctx.author.name,
         "name": champion,
         "image": image
     }
@@ -133,10 +134,9 @@ async def skin(ctx, name):
 
     await ctx.send(f"Adquirindo skin do campeão {name}...")
     while True:
-        number = random.randint(1, num_skins)
+        number = random.randint(1, num_skins - 1)
         skin_url = f"https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{name}_{number}.jpg"
         new_skin = requests.get(skin_url)
-        print("Status code:", new_skin.status_code)
         if new_skin.status_code == 200:
             break
 
@@ -175,17 +175,63 @@ async def skins(ctx, name):
 
     await ctx.send(embed=embed, view=ChampView(skins))
 
+@bot.command()
+async def search(ctx, name):
+    champions_collection = get_champions_collection()
+    existent_champion = await champions_collection.find_one({"name": name})
+    if not existent_champion:
+        await ctx.send("Este campeão ainda não foi encontrado.")
+        return
+
+    owner = existent_champion.get("owner", "Desconhecido")
+    await ctx.send(f"Campeão {name} pertence ao usuário {owner}!")
+
+@bot.command()
+async def setAura(ctx, name, level):
+    if ctx.author.id != "432174897473781771":
+        await ctx.send("Você não tem permissão para usar este comando.")
+        return
+    champions_collection = get_champions_collection()
+    existent_champion = await champions_collection.find_one({"name": name})
+    if not existent_champion:
+        await ctx.send("Este campeão ainda não foi encontrado.")
+        return
+    try:
+        level = int(level)
+        if level not in [1, 2, 3, 4, 5]:
+            await ctx.send("Nível de aura inválido. Use um valor entre 1 e 5.")
+            return
+    except ValueError:
+        await ctx.send("O nível de aura deve ser um número entre 1 e 5.")
+        return
+
+    aura_labels = {
+        1: "Zero Aura",
+        2: "Aura Fraca",
+        3: "Aura Normal",
+        4: "Muita Aura",
+        5: "Aura Farming"
+    }
+
+    await champions_collection.update_one(
+        {"name": name},
+        {"$set": {"aura_level": level, "aura_label": aura_labels[level]}}
+    )
+    await ctx.send(f"Aura do campeão {name} definida para '{aura_labels[level]}' (nível {level}).")
+
 
 @bot.command()
 async def help(ctx):
     help_message = (
         "Comandos disponíveis:\n"
         "!ping - Responde com Pong!\n"
-        "!champ - Escolhe um campeão aleatório do League of Legends e envia a imagem\n"
-        "!mychamps - Mostra o campeão escolhido por você\n"
+        "!champ - Escolhe um campeão aleatório do League of Legends\n"
+        "!mychamps - Mostra os campeões escolhidos por você\n"
         "!delete <nome> - Deleta o campeão escolhido por você\n"
         "!skin <nome> - Adquire uma skin aleatória para o campeão escolhido\n"
         "!skins <nome> - Mostra as skins adquiridas para o campeão escolhido\n"
+        "!search <nome> - Busca informações sobre um campeão\n"
+        "(apenas admin) !setAura <nome> <nível> - Define o nível de aura do campeão (1-5)\n"
     )
     await ctx.send(help_message)
 
