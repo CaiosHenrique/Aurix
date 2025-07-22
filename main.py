@@ -46,6 +46,15 @@ class ChampView(View):
 @bot.event
 async def on_ready():
     print(f'Bot conectado como {bot.user}')
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            try:
+                await channel.send("Aurix aqui! Use !help para ver os comandos disponíveis. 😊")
+                break
+            except:
+                continue
+        break
+
 
 @bot.event
 async def on_command_error(ctx, error):
