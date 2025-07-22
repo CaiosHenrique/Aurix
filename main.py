@@ -118,13 +118,19 @@ async def delete(ctx, name):
         await ctx.send(f"Campeão {name} não encontrado.")
 
 @bot.command()
-async def skin(ctx, name):
+async def skin(ctx):
     champions_collection = get_champions_collection()
-    existent_champion = await champions_collection.find_one({"user_id": ctx.author.id, "name": name})
-    if not existent_champion:
-        await ctx.send("Voce nao possui esse campeao.")
-        await ctx.send("Use !mychamps para ver seus campeões.")
+    user_champions = await champions_collection.find({"user_id": ctx.author.id}).to_list(length=100)
+    if not user_champions:
+        await ctx.send("Você não possui nenhum campeão.")
+        await ctx.send("Use !champ para obter um campeão primeiro.")
         return
+  
+    chosen_champion = random.choice(user_champions)
+    name = chosen_champion['name']
+    
+    await ctx.send(f"Campeão escolhido: {name}")
+    await ctx.send(f"Adquirindo skin do campeão {name}...")
     
     champion = f"https://ddragon.leagueoflegends.com/cdn/15.14.1/data/en_US/champion/{name}.json"
     response = requests.get(champion)
@@ -132,7 +138,6 @@ async def skin(ctx, name):
     skins = response.json().get('data', {}).get(name, {}).get('skins', [])
     num_skins = len(skins)
 
-    await ctx.send(f"Adquirindo skin do campeão {name}...")
     while True:
         number = random.randint(1, num_skins - 1)
         skin_url = f"https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{name}_{number}.jpg"
@@ -141,20 +146,21 @@ async def skin(ctx, name):
             break
 
     skin_name = skins[number]['name'] if number < len(skins) else "Unknown"
-    if 'owned_skins' in existent_champion:
-        for s in existent_champion['owned_skins']:
+    
+    if 'owned_skins' in chosen_champion:
+        for s in chosen_champion['owned_skins']:
             if s['skin'] == skin_name:
                 await ctx.send(f"Você já possui a skin '{skin_name}' para o campeão {name}.")
                 return
             
     await champions_collection.update_one(
-            {"user_id": ctx.author.id, "name": name},
-            {"$push": {"owned_skins": {"skin": skin_name, "skin_image": skin_url}}}
-        )
+        {"user_id": ctx.author.id, "name": name},
+        {"$push": {"owned_skins": {"skin": skin_name, "skin_image": skin_url}}}
+    )
 
-    new_skin = discord.Embed(title=f"{skin_name}")
-    new_skin.set_image(url=skin_url)
-    await ctx.send(embed=new_skin)
+    new_skin_embed = discord.Embed(title=f"{skin_name}")
+    new_skin_embed.set_image(url=skin_url)
+    await ctx.send(embed=new_skin_embed)
 
 @bot.command()
 async def skins(ctx, name):
@@ -188,7 +194,7 @@ async def search(ctx, name):
 
 @bot.command()
 async def setAura(ctx, name, level):
-    if ctx.author.id != "432174897473781771":
+    if ctx.author.id != 432174897473781771:
         await ctx.send("Você não tem permissão para usar este comando.")
         return
     champions_collection = get_champions_collection()
@@ -205,12 +211,20 @@ async def setAura(ctx, name, level):
         await ctx.send("O nível de aura deve ser um número entre 1 e 5.")
         return
 
+    owned_skins = existent_champion.get('owned_skins', [])
+    if owned_skins:
+        if level < 5:
+            level += 1
+        elif level == 5:
+            level = 6
+
     aura_labels = {
         1: "Zero Aura",
         2: "Aura Fraca",
         3: "Aura Normal",
-        4: "Muita Aura",
-        5: "Aura Farming"
+        4: "Aura Forte",
+        5: "Muita Aura",
+        6: "Aura Farming"
     }
 
     await champions_collection.update_one(
