@@ -49,7 +49,7 @@ async def on_ready():
     for guild in bot.guilds:
         for channel in guild.text_channels:
             try:
-                await channel.send("Aurix aqui! Use !help para ver os comandos disponíveis. 😊")
+                await channel.send("Aurix aqui! Use '!help' para ver os comandos disponíveis. 😊")
                 break
             except:
                 continue
@@ -104,8 +104,31 @@ async def champ(ctx):
         await ctx.send(f"o campeão {champion} já foi escolhido.")
         return
 
-    await champions_collection.insert_one(champion_data)
-    await ctx.send(image)
+    embed = discord.Embed(title=champion)
+    embed.set_image(url=image)
+    
+    class SaveChampView(View):
+        def __init__(self, champion_data):
+            super().__init__(timeout=60)
+            self.champion_data = champion_data
+            self.saved = False
+        
+        @discord.ui.button(label="💾 Salvar", style=discord.ButtonStyle.success)
+        async def save_champion(self, interaction: discord.Interaction, button: Button):
+            if self.saved:
+                await interaction.response.send_message("Campeão já foi salvo!", ephemeral=True)
+                return
+                
+            await champions_collection.insert_one(self.champion_data)
+            self.saved = True
+            button.disabled = True
+            await interaction.response.edit_message(view=self)
+            await interaction.followup.send(f"Campeão {self.champion_data['name']} salvo com sucesso!", ephemeral=True)
+    
+    view = SaveChampView(champion_data)
+    await ctx.send(embed=embed, view=view) 
+    embed = discord.Embed(title=champion)
+
 
 @bot.command()
 async def mychamps(ctx):
@@ -152,7 +175,7 @@ async def skin(ctx):
     num_skins = len(skins)
 
     while True:
-        number = random.randint(1, num_skins - 1)
+        number = random.randint(1, num_skins)
         skin_url = f"https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{name}_{number}.jpg"
         new_skin = requests.get(skin_url)
         if new_skin.status_code == 200:
