@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 import requests
 import random
 from database import get_champions_collection
+import asyncio
 load_dotenv()
 
 intents = discord.Intents.default()
@@ -177,6 +178,26 @@ async def skin(ctx):
     while True:
         number = random.randint(1, num_skins)
         skin_url = f"https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{name}_{number}.jpg"
+        loading_url = f"https://ddragon.leagueoflegends.com/cdn/img/champion/loading/{name}_{number}.jpg"
+        new_skin = requests.get(skin_url)
+        if new_skin.status_code == 200:
+            break
+
+        skin_name = skins[number]['name'] if number < len(skins) else "Unknown"
+        
+        if 'owned_skins' in chosen_champion:
+            for s in chosen_champion['owned_skins']:
+                if s['skin'] == skin_name:
+                    await ctx.send(f"Você já possui a skin '{skin_name}' para o campeão {name}.")
+                    return
+            
+        await champions_collection.update_one(
+        {"user_id": ctx.author.id, "name": name},
+        {"$push": {"owned_skins": {"skin": skin_name, "skin_image": loading_url}}}
+        )
+
+        new_skin_embed = discord.Embed(title=f"{skin_name}")
+        new_skin_embed.set_image(url=skin_url) 
         new_skin = requests.get(skin_url)
         if new_skin.status_code == 200:
             break
@@ -310,6 +331,265 @@ async def changeskin(ctx, name):
     except:
         await ctx.send("Tempo esgotado.")
 
+class BattleView(View):
+    def __init__(self, challenger, opponent, challenger_champs, opponent_champs):
+        super().__init__(timeout=300)
+        self.challenger = challenger
+        self.opponent = opponent
+        self.challenger_champs = challenger_champs
+        self.opponent_champs = opponent_champs
+        self.accepted = False
+
+    @discord.ui.button(label="✅ Aceitar Batalha", style=discord.ButtonStyle.success)
+    async def accept_battle(self, interaction: discord.Interaction, button: Button):
+        if interaction.user.id != self.opponent.id:
+            await interaction.response.send_message("Apenas o desafiado pode aceitar a batalha!", ephemeral=True)
+            return
+        
+        self.accepted = True
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
+        
+        # Iniciar batalha
+        await self.start_battle(interaction)
+
+    async def start_battle(self, interaction):
+        # Preparar campeões para batalha
+        challenger_team = []
+        opponent_team = []
+        
+        for champ in self.challenger_champs:
+            challenger_team.append({
+                'name': champ['name'],
+                'hp': 20,
+                'aura_level': champ.get('aura_level', 1),
+                'owner': self.challenger.name,
+                'image': champ.get('skin_image', champ.get('image', ''))
+            })
+        
+        for champ in self.opponent_champs:
+            opponent_team.append({
+                'name': champ['name'],
+                'hp': 20,
+                'aura_level': champ.get('aura_level', 1),
+                'owner': self.opponent.name,
+                'image': champ.get('skin_image', champ.get('image', ''))
+            })
+        
+        await interaction.followup.send("🔥 **BATALHA INICIADA!** 🔥")
+        
+        # Simular batalha por turnos
+        round_num = 1
+        while challenger_team and opponent_team:
+            # Campeão atual de cada time
+            challenger_champ = challenger_team[0]
+            opponent_champ = opponent_team[0]
+            
+            # Criar embed do confronto principal
+            embed = discord.Embed(
+                title=f"⚔️ RODADA {round_num} ⚔️",
+                color=0xff0000
+            )
+
+            embed.add_field(
+                name=f"{challenger_champ['name']} ({self.challenger.name})",
+                value=f"❤️ HP: {challenger_champ['hp']}/20\n🌟 Aura: {challenger_champ['aura_level']}",
+                inline=True
+            )
+
+            embed.add_field(
+                name="⚔️ VS ⚔️",
+                value="━━━━━━━━━━",
+                inline=True
+            )
+
+            embed.add_field(
+                name=f"{opponent_champ['name']} ({self.opponent.name})",
+                value=f"❤️ HP: {opponent_champ['hp']}/20\n🌟 Aura: {opponent_champ['aura_level']}",
+                inline=True
+            )
+
+            await interaction.followup.send(embed=embed)
+            
+            # Criar embeds separados para as imagens lado a lado
+            if challenger_champ['image'] and opponent_champ['image']:
+                # Embed do challenger
+                challenger_embed = discord.Embed(title=f"⚔️ {challenger_champ['name']}", color=0x0099ff)
+                challenger_embed.set_image(url=challenger_champ['image'])
+                
+                # Embed do opponent
+                opponent_embed = discord.Embed(title=f"🛡️ {opponent_champ['name']}", color=0xff9900)
+                opponent_embed.set_image(url=opponent_champ['image'])
+                
+                # Enviar os dois embeds em sequência
+                await interaction.followup.send(embed=challenger_embed)
+                await interaction.followup.send(embed=opponent_embed)
+            
+            elif challenger_champ['image']:
+                challenger_embed = discord.Embed(title=f"⚔️ {challenger_champ['name']}")
+                challenger_embed.set_image(url=challenger_champ['image'])
+                await interaction.followup.send(embed=challenger_embed)
+            
+            elif opponent_champ['image']:
+                opponent_embed = discord.Embed(title=f"🛡️ {opponent_champ['name']}")
+                opponent_embed.set_image(url=opponent_champ['image'])
+                await interaction.followup.send(embed=opponent_embed)
+
+            await asyncio.sleep(3)
+            
+            # Calcular dano
+            challenger_damage = self.calculate_damage(challenger_champ['aura_level'])
+            opponent_damage = self.calculate_damage(opponent_champ['aura_level'])
+            
+            # Aplicar dano
+            challenger_champ['hp'] -= opponent_damage
+            opponent_champ['hp'] -= challenger_damage
+            
+            # Criar embed dos resultados
+            result_embed = discord.Embed(title="💥 Resultado do Turno", color=0xffa500)
+            result_embed.add_field(
+                name=f"{challenger_champ['name']}",
+                value=f"Causou {challenger_damage} de dano\nHP restante: {max(0, challenger_champ['hp'])}/20",
+                inline=True
+            )
+            result_embed.add_field(
+                name="⚡",
+                value="━━━━━━",
+                inline=True
+            )
+            result_embed.add_field(
+                name=f"{opponent_champ['name']}",
+                value=f"Causou {opponent_damage} de dano\nHP restante: {max(0, opponent_champ['hp'])}/20",
+                inline=True
+            )
+            
+            await interaction.followup.send(embed=result_embed)
+            
+            # Verificar se alguém morreu
+            deaths = []
+            if challenger_champ['hp'] <= 0:
+                deaths.append(f"💀 {challenger_champ['name']} foi derrotado!")
+                challenger_team.pop(0)
+            if opponent_champ['hp'] <= 0:
+                deaths.append(f"💀 {opponent_champ['name']} foi derrotado!")
+                opponent_team.pop(0)
+            
+            if deaths:
+                death_embed = discord.Embed(title="💀 Campeão Derrotado!", description="\n".join(deaths), color=0x800080)
+                await interaction.followup.send(embed=death_embed)
+            
+            await asyncio.sleep(3)
+            round_num += 1
+        
+        # Determinar vencedor
+        if challenger_team:
+            winner = self.challenger
+            winner_team = self.challenger_champs
+            loser = self.opponent
+            loser_champs = self.opponent_champs
+            winner_name = self.challenger.name
+        else:
+            winner = self.opponent
+            winner_team = self.opponent_champs
+            loser = self.challenger
+            loser_champs = self.challenger_champs
+            winner_name = self.opponent.name
+        
+        # Embed final
+        final_embed = discord.Embed(
+            title="🏆 BATALHA FINALIZADA! 🏆",
+            description=f"**{winner_name} VENCEU A BATALHA!**",
+            color=0x00ff00
+        )
+        final_embed.add_field(name="Campeões sobreviventes", value=str(len(challenger_team if challenger_team else opponent_team)), inline=True)
+        final_embed.add_field(name="Rodadas totais", value=str(round_num - 1), inline=True)
+        
+        await interaction.followup.send(embed=final_embed)
+        
+        # Atualizar banco de dados
+        await self.update_database_after_battle(winner.id, winner_team, loser.id, loser_champs)
+        
+
+    def calculate_damage(self, aura_level):
+        base_roll = random.randint(1, 20)
+        
+        # Bônus de aura (aumenta chance de valores altos)
+        aura_bonus = {
+            1: 0,
+            2: 1,
+            3: 2,
+            4: 3,
+            5: 4,
+            6: 5
+        }
+        
+        bonus = aura_bonus.get(aura_level, 0)
+        
+        # Chance de reroll com valor mais alto baseado na aura
+        if bonus > 0 and random.randint(1, 10) <= bonus:
+            second_roll = random.randint(1, 20)
+            return max(base_roll, second_roll)
+        
+        return base_roll
+
+    async def update_database_after_battle(self, winner_id, winner_champs, loser_id, loser_champs):
+        champions_collection = get_champions_collection()
+        
+        # Deletar campeões do perdedor
+        for champ in loser_champs:
+            await champions_collection.delete_one({"user_id": loser_id, "name": champ['name']})
+        
+        # Atualizar campeões do vencedor com vitórias
+        for champ in winner_champs:
+            current_wins = champ.get('wins', 0)
+            await champions_collection.update_one(
+                {"user_id": winner_id, "name": champ['name']},
+                {"$set": {"wins": current_wins + 1}}
+            )
+
+@bot.command()
+async def battle(ctx, opponent: discord.Member):
+    # if opponent.id == ctx.author.id:
+    #     await ctx.send("Você não pode desafiar a si mesmo!")
+    #     return
+    
+    if opponent.bot:
+        await ctx.send("Você não pode desafiar um bot!")
+        return
+    
+    champions_collection = get_champions_collection()
+    
+    # Verificar se o desafiante tem pelo menos 5 campeões
+    challenger_champs = await champions_collection.find({"user_id": ctx.author.id}).to_list(length=100)
+    if len(challenger_champs) < 5:
+        await ctx.send("Você precisa ter pelo menos 5 campeões para batalhar!")
+        return
+    
+    # Verificar se o oponente tem pelo menos 5 campeões
+    opponent_champs = await champions_collection.find({"user_id": opponent.id}).to_list(length=100)
+    if len(opponent_champs) < 5:
+        await ctx.send(f"{opponent.name} precisa ter pelo menos 5 campeões para batalhar!")
+        return
+    
+    # Selecionar os primeiros 5 campeões de cada jogador
+    challenger_team = challenger_champs[:5]
+    opponent_team = opponent_champs[:5]
+    
+    # Criar embed com informações da batalha
+    embed = discord.Embed(title="⚔️ DESAFIO DE BATALHA! ⚔️", color=0xff0000)
+    embed.add_field(name="Desafiante", value=ctx.author.name, inline=True)
+    embed.add_field(name="Oponente", value=opponent.name, inline=True)
+    embed.add_field(name="⚠️ AVISO", value="O perdedor terá seus 5 campeões deletados!", inline=False)
+    
+    challenger_names = "\n".join([f"• {champ['name']}" for champ in challenger_team])
+    opponent_names = "\n".join([f"• {champ['name']}" for champ in opponent_team])
+    
+    embed.add_field(name=f"Time de {ctx.author.name}", value=challenger_names, inline=True)
+    embed.add_field(name=f"Time de {opponent.name}", value=opponent_names, inline=True)
+    
+    view = BattleView(ctx.author, opponent, challenger_team, opponent_team)
+    await ctx.send(f"{opponent.mention}, você foi desafiado para uma batalha!", embed=embed, view=view)
+
 @bot.command()
 async def help(ctx):
     help_message = (
@@ -322,6 +602,7 @@ async def help(ctx):
         "!skins <nome> - Mostra as skins adquiridas para o campeão escolhido\n"
         "!search <nome> - Busca informações sobre um campeão\n"
         "!changeskin <nome> - Permite escolher uma skin para o campeão escolhido\n"
+        "!battle <@oponente> - Desafia um usuário para uma batalha (5 campeões necessários)\n"
         "(apenas admin) !setAura <nome> <nível> - Define o nível de aura do campeão (1-5)\n"
     )
     await ctx.send(help_message)
