@@ -97,7 +97,8 @@ async def champ(ctx):
         "user_id": ctx.author.id,
         "owner": ctx.author.name,
         "name": champion,
-        "image": image
+        "image": image,
+        "wins": 0
     }
 
     existent_champion = await champions_collection.find_one({"name": champion})
@@ -549,9 +550,9 @@ class BattleView(View):
 
 @bot.command()
 async def battle(ctx, opponent: discord.Member):
-    # if opponent.id == ctx.author.id:
-    #     await ctx.send("Você não pode desafiar a si mesmo!")
-    #     return
+    if opponent.id == ctx.author.id:
+        await ctx.send("Você não pode desafiar a si mesmo!")
+        return
     
     if opponent.bot:
         await ctx.send("Você não pode desafiar um bot!")
@@ -559,23 +560,20 @@ async def battle(ctx, opponent: discord.Member):
     
     champions_collection = get_champions_collection()
     
-    # Verificar se o desafiante tem pelo menos 5 campeões
+
     challenger_champs = await champions_collection.find({"user_id": ctx.author.id}).to_list(length=100)
     if len(challenger_champs) < 5:
         await ctx.send("Você precisa ter pelo menos 5 campeões para batalhar!")
         return
     
-    # Verificar se o oponente tem pelo menos 5 campeões
     opponent_champs = await champions_collection.find({"user_id": opponent.id}).to_list(length=100)
     if len(opponent_champs) < 5:
         await ctx.send(f"{opponent.name} precisa ter pelo menos 5 campeões para batalhar!")
         return
     
-    # Selecionar os primeiros 5 campeões de cada jogador
     challenger_team = challenger_champs[:5]
     opponent_team = opponent_champs[:5]
     
-    # Criar embed com informações da batalha
     embed = discord.Embed(title="⚔️ DESAFIO DE BATALHA! ⚔️", color=0xff0000)
     embed.add_field(name="Desafiante", value=ctx.author.name, inline=True)
     embed.add_field(name="Oponente", value=opponent.name, inline=True)
@@ -591,6 +589,60 @@ async def battle(ctx, opponent: discord.Member):
     await ctx.send(f"{opponent.mention}, você foi desafiado para uma batalha!", embed=embed, view=view)
 
 @bot.command()
+async def rank(ctx):
+    champions_collection = get_champions_collection()
+
+    # Buscar todos os campeões e agrupar por usuário
+    all_champions = await champions_collection.find({}).to_list(length=1000)
+    
+    if not all_champions:
+        await ctx.send("Nenhum campeão encontrado no banco de dados.")
+        return
+    
+    user_wins = {}
+    
+    for champ in all_champions:
+        user_id = champ.get('user_id')
+        owner = champ.get('owner', 'Desconhecido')
+        wins = champ.get('wins', 0)
+        
+        if user_id not in user_wins:
+            user_wins[user_id] = {'owner': owner, 'total_wins': 0}
+        
+        user_wins[user_id]['total_wins'] += wins
+    
+    ranking_list = sorted(user_wins.items(), key=lambda x: x[1]['total_wins'], reverse=True)
+    
+    if not ranking_list:
+        await ctx.send("Nenhum usuário com vitórias encontrado.")
+        return
+    
+    embed = discord.Embed(title="🏆 RANKING DE VITÓRIAS 🏆", color=0xffd700)
+    
+    for i, (user_id, data) in enumerate(ranking_list[:10]):  # Top 10
+        position = i + 1
+        owner = data['owner']
+        total_wins = data['total_wins']
+        
+        # Emojis para as primeiras posições
+        if position == 1:
+            medal = "🥇"
+        elif position == 2:
+            medal = "🥈"
+        elif position == 3:
+            medal = "🥉"
+        else:
+            medal = f"{position}."
+        
+        embed.add_field(
+            name=f"{medal} {owner}",
+            value=f"Vitórias: {total_wins}",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command()
 async def help(ctx):
     help_message = (
         "Comandos disponíveis:\n"
@@ -603,9 +655,10 @@ async def help(ctx):
         "!search <nome> - Busca informações sobre um campeão\n"
         "!changeskin <nome> - Permite escolher uma skin para o campeão escolhido\n"
         "!battle <@oponente> - Desafia um usuário para uma batalha (5 campeões necessários)\n"
+        "!rank - Mostra o ranking de vitórias dos usuários\n"
         "(apenas admin) !setAura <nome> <nível> - Define o nível de aura do campeão (1-5)\n"
+        "!help - Mostra esta mensagem de ajuda\n"
     )
     await ctx.send(help_message)
 
-TOKEN = os.getenv('DISCORD_TOKEN')
-bot.run(TOKEN)
+bot.run(os.getenv('DISCORD_TOKEN'))
