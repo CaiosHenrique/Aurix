@@ -120,12 +120,30 @@ async def champ(ctx):
             if self.saved:
                 await interaction.response.send_message("Campeão já foi salvo!", ephemeral=True)
                 return
-                
-            await champions_collection.insert_one(self.champion_data)
+            
+            champions_collection = get_champions_collection()
+            existing_for_user = await champions_collection.find_one({
+                "user_id": interaction.user.id, 
+                "name": self.champion_data['name']
+            })
+            
+            if existing_for_user:
+                await interaction.response.send_message(f"Você já possui o campeão {self.champion_data['name']}!", ephemeral=True)
+                return
+            
+            champion_data_for_clicker = {
+                "user_id": interaction.user.id,
+                "owner": interaction.user.name,
+                "name": self.champion_data['name'],
+                "image": self.champion_data['image'],
+                "wins": 0
+            }
+            
+            await champions_collection.insert_one(champion_data_for_clicker)
             self.saved = True
             button.disabled = True
             await interaction.response.edit_message(view=self)
-            await interaction.followup.send(f"Campeão {self.champion_data['name']} salvo com sucesso!", ephemeral=True)
+            await interaction.followup.send(f"Campeão {self.champion_data['name']} salvo com sucesso para {interaction.user.name}!", ephemeral=True)
     
     view = SaveChampView(champion_data)
     await ctx.send(embed=embed, view=view) 
@@ -179,7 +197,6 @@ async def skin(ctx):
     while True:
         number = random.randint(1, num_skins)
         skin_url = f"https://ddragon.leagueoflegends.com/cdn/img/champion/splash/{name}_{number}.jpg"
-        loading_url = f"https://ddragon.leagueoflegends.com/cdn/img/champion/loading/{name}_{number}.jpg"
         new_skin = requests.get(skin_url)
         if new_skin.status_code == 200:
             break
@@ -192,10 +209,6 @@ async def skin(ctx):
                     await ctx.send(f"Você já possui a skin '{skin_name}' para o campeão {name}.")
                     return
             
-        await champions_collection.update_one(
-        {"user_id": ctx.author.id, "name": name},
-        {"$push": {"owned_skins": {"skin": skin_name, "skin_image": loading_url}}}
-        )
 
         new_skin_embed = discord.Embed(title=f"{skin_name}")
         new_skin_embed.set_image(url=skin_url) 
@@ -234,8 +247,9 @@ async def skins(ctx, name):
         await ctx.send("Você não possui skins para este campeão.")
         return
     
+    first_skin = skins[0]
     embed = discord.Embed(title=f"Skins do campeão {name}")
-    embed.set_image(url=existent_champion['skin_image'])
+    embed.set_image(url=first_skin.get('skin_image', existent_champion.get('image', '')))
 
     await ctx.send(embed=embed, view=ChampView(skins))
 
